@@ -1,0 +1,11 @@
+package  com.hongyun.asynctask.model;
+
+public enum TaskStateChangeReason {
+    MANUAL_STATUS_UPDATE,
+    WORKER_PICKED_PENDING_TASK,
+    WORKER_EXECUTION_SUCCEEDED,
+    WORKER_EXECUTION_FAILED,
+    RETRY_ELIGIBLE_FAILED_TASK,
+    RETRY_LIMIT_REACHED,
+    RUNNING_TASK_TIMED_OUT
+}

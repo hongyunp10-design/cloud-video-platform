@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.hongyun.asynctask.mapper.TaskMapper">
+
+    <resultMap id="TaskResultMap" type="Task">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="type" column="type"/>
+        <result property="status" column="status"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="maxRetryCount" column="max_retry_count"/>
+        <result property="lastErrorMessage" column="last_error_message"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="startedAt" column="started_at"/>
+    </resultMap>
+
+    <insert id="insertTask" parameterType="Task" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO task (
+            name,
+            type,
+            status,
+            retry_count,
+            max_retry_count,
+            last_error_message
+        )
+        VALUES (
+            #{name},
+            #{type},
+            #{status},
+            #{retryCount},
+            #{maxRetryCount},
+            #{lastErrorMessage}
+        )
+    </insert>
+
+    <select id="selectTaskById" resultMap="TaskResultMap">
+        SELECT
+            id,
+            name,
+            type,
+            status,
+            retry_count,
+            max_retry_count,
+            last_error_message,
+            created_at,
+            updated_at,
+            started_at
+        FROM task
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectAllTasks" resultMap="TaskResultMap">
+        SELECT
+            id,
+            name,
+            type,
+            status,
+            retry_count,
+            max_retry_count,
+            last_error_message,
+            created_at,
+            updated_at,
+            started_at
+        FROM task
+        ORDER BY id
+    </select>
+
+    <update id="updateTask" parameterType="Task">
+        UPDATE task
+        SET name = #{name},
+        type = #{type},
+        status = #{status},
+        retry_count = #{retryCount},
+        max_retry_count = #{maxRetryCount}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteTaskById">
+        DELETE FROM task
+        WHERE id = #{id}
+    </delete>
+
+    <select id="selectFailedTasksForRetry" resultMap="TaskResultMap">
+        SELECT
+            id,
+            name,
+            type,
+            status,
+            retry_count,
+            max_retry_count,
+            last_error_message,
+            created_at,
+            updated_at,
+            started_at
+        FROM task
+        WHERE status = 'FAILED'
+        ORDER BY id
+    </select>
+
+    <select id="selectPendingTasks" resultMap="TaskResultMap">
+        SELECT
+            id,
+            name,
+            type,
+            status,
+            retry_count,
+            max_retry_count,
+            last_error_message,
+            created_at,
+            updated_at,
+            started_at
+        FROM task
+        WHERE status = 'PENDING'
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <update id="updateTaskStatusIfCurrentStatus">
+        UPDATE task
+        SET status = #{toStatus}
+        WHERE id = #{id}
+          AND status = #{fromStatus}
+    </update>
+
+    <update id="retryTaskIfCurrentStatusAndRetryCount">
+        UPDATE task
+        SET
+            status = #{toStatus},
+            retry_count = #{newRetryCount},
+            last_error_message = NULL
+        WHERE id = #{id}
+          AND status = #{fromStatus}
+          AND retry_count = #{oldRetryCount}
+    </update>
+
+    <update id="updateTaskStatusAndLastErrorIfCurrentStatus">
+        UPDATE task
+        SET
+            status = #{toStatus},
+            last_error_message = #{lastErrorMessage}
+        WHERE id = #{id}
+          AND status = #{fromStatus}
+    </update>
+
+    <update id="updateTaskStatusAndClearLastErrorIfCurrentStatus">
+        UPDATE task
+        SET
+            status = #{toStatus},
+            last_error_message = NULL
+        WHERE id = #{id}
+            AND status = #{fromStatus}
+    </update>
+
+    <select id="countTasksByStatus" resultType="long">
+        SELECT COUNT(*)
+        FROM task
+        WHERE status = #{status}
+    </select>
+
+    <update id="claimTaskIfCurrentStatus">
+        UPDATE task
+        SET
+            status = #{toStatus},
+            started_at = CURRENT_TIMESTAMP,
+            last_error_message = NULL
+        WHERE id = #{id}
+            AND status = #{fromStatus}
+    </update>
+
+    <select id="selectTimedOutRunningTasks" resultMap="TaskResultMap">
+        SELECT
+            id,
+            name,
+            type,
+            status,
+            retry_count,
+            max_retry_count,
+            last_error_message,
+            created_at,
+            updated_at,
+            started_at
+        FROM task
+        WHERE status = 'RUNNING'
+          AND started_at IS NOT NULL
+          AND TIMESTAMPDIFF(SECOND, started_at, CURRENT_TIMESTAMP) > #{timeoutSeconds}
+        ORDER BY started_at ASC
+    </select>
+
+    <update id="updateTaskStartedAt">
+        UPDATE task
+        SET started_at = #{startedAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateTaskStartedAtByOffsetSeconds">
+        UPDATE task
+        SET started_at = TIMESTAMPADD(SECOND, #{offsetSeconds}, CURRENT_TIMESTAMP)
+        WHERE id = #{id}
+    </update>
+</mapper>

@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-provider-code
+data:
+  server.py: |
+    import json
+    import time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse
+
+    # 用于“只失败一次”的模拟：key=(mode, request_id) -> count
+    STATE = {}
+
+    def _read_json(handler):
+        n = int(handler.headers.get("Content-Length", "0") or "0")
+        body = handler.rfile.read(n) if n > 0 else b"{}"
+        try:
+            return json.loads(body.decode("utf-8", errors="replace"))
+        except Exception:
+            return {}
+
+    def _write_json(handler, status, payload):
+        out = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(out)))
+        handler.end_headers()
+        handler.wfile.write(out)
+
+    def _parse_sleep_ms(prompt: str) -> int:
+        # 约定：prompt 含 "sleep_ms=2000" 就 sleep 2000ms
+        if not prompt:
+            return 0
+        k = "sleep_ms="
+        if k not in prompt:
+            return 0
+        try:
+            tail = prompt.split(k, 1)[1]
+            num = ""
+            for ch in tail:
+                if ch.isdigit():
+                    num += ch
+                else:
+                    break
+            return int(num) if num else 0
+        except Exception:
+            return 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            # 降噪：你需要日志时再打开
+            return
+
+        def do_GET(self):
+            p = urlparse(self.path).path
+            if p == "/healthz":
+                return _write_json(self, 200, {"ok": True})
+            return _write_json(self, 404, {"error": "not_found", "path": p})
+
+        def do_POST(self):
+            p = urlparse(self.path).path
+            if p != "/echo":
+                return _write_json(self, 404, {"error": "not_found", "path": p})
+
+            req = _read_json(self)
+            prompt = str(req.get("prompt", "") or "")
+            request_id = str(req.get("request_id", "") or "")
+
+            # 1) 支持 timeout 测试：sleep_ms>timeout_ms 就会被 client timeout
+            sleep_ms = _parse_sleep_ms(prompt)
+            if sleep_ms > 0:
+                time.sleep(sleep_ms / 1000.0)
+
+            # 2) 支持一次性错误测试（依赖 request_id）
+            #    - "once_429": 第一次返回 429，第二次返回 200（用于验证 retry 能成功）
+            #    - "once_500": 第一次返回 500，第二次返回 200
+            #    - "always_429"/"always_500": 永远失败（用于验证最终 failed）
+            mode = None
+            if "once_429" in prompt:
+                mode = "once_429"
+            elif "once_500" in prompt:
+                mode = "once_500"
+            elif "always_429" in prompt:
+                mode = "always_429"
+            elif "always_500" in prompt:
+                mode = "always_500"
+
+            if mode in ("always_429", "always_500"):
+                code = 429 if mode.endswith("429") else 500
+                return _write_json(self, code, {"text": f"[{mode}] {prompt}", "request_id": request_id})
+
+            if mode in ("once_429", "once_500"):
+                key = (mode, request_id or "no_request_id")
+                c = STATE.get(key, 0)
+                STATE[key] = c + 1
+                if c == 0:
+                    code = 429 if mode.endswith("429") else 500
+                    return _write_json(self, code, {"text": f"[{mode}-first] {prompt}", "request_id": request_id})
+
+            # 3) 正常成功返回
+            return _write_json(self, 200, {"text": f"[echo] {prompt}", "request_id": request_id})
+
+    if __name__ == "__main__":
+        port = 8080
+        srv = HTTPServer(("0.0.0.0", port), Handler)
+        print(f"llm-provider listening on :{port}", flush=True)
+        srv.serve_forever()
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-provider
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-provider
+  template:
+    metadata:
+      labels:
+        app: llm-provider
+    spec:
+      containers:
+        - name: llm-provider
+          image: python:3.11-slim
+          ports:
+            - containerPort: 8080
+          command: ["python", "/app/server.py"]
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: code
+          configMap:
+            name: llm-provider-code
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-provider
+spec:
+  selector:
+    app: llm-provider
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

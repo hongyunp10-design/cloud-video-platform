@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.hongyun.asynctask.mapper.TaskStateAuditMapper">
+    <resultMap id="TaskStateAuditResultMap"
+               type="com.hongyun.asynctask.model.TaskStateAudit">
+        <id property="id" column="id"/>
+        <result property="taskId" column="task_id"/>
+        <result property="fromStatus" column="from_status"/>
+        <result property="toStatus" column="to_status"/>
+        <result property="actor" column="actor"/>
+        <result property="reason" column="reason"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="maxRetryCount" column="max_retry_count"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <insert id="insertTaskStateAudit"
+            parameterType="com.hongyun.asynctask.model.TaskStateAudit">
+        INSERT INTO task_state_audit (
+            task_id,
+            from_status,
+            to_status,
+            actor,
+            reason,
+            retry_count,
+            max_retry_count
+        )
+        VALUES (
+            #{taskId},
+            #{fromStatus},
+            #{toStatus},
+            #{actor},
+            #{reason},
+            #{retryCount},
+            #{maxRetryCount}
+        )
+    </insert>
+
+    <select id="selectTaskStateAuditsByTaskId"
+            resultMap="TaskStateAuditResultMap">
+        SELECT
+            id,
+            task_id,
+            from_status,
+            to_status,
+            actor,
+            reason,
+            retry_count,
+            max_retry_count,
+            created_at
+        FROM task_state_audit
+        WHERE task_id = #{taskId}
+        <if test="actor != null">
+            AND actor = #{actor}
+        </if>
+        <if test="reason != null">
+            AND reason = #{reason}
+        </if>
+        ORDER BY id
+    </select>
+
+    <delete id="deleteTaskStateAuditsByTaskId">
+        DELETE FROM task_state_audit
+        WHERE task_id = #{taskId}
+    </delete>
+
+</mapper>

@@ -1,0 +1,125 @@
+调用链1 ： 创建任务
+
+Client
+-> POST/api/tasks
+-> TaskController.createTask()
+-> TaskService.createTask()
+-> TaskMapper.insertTask()
+-> MySQL task table
+-> return ApiResponse<Task>
+
+
+调用链2 ： 查询任务
+Client
+-> GET /api/tasks/{id}
+-> TaskController.getTaskById()
+-> TaskService.getTaskById()
+-> Redis taskCache
+
+Cache hit:
+    -> return created task
+
+Cache miss:
+    -> TaskMapper.selectTaskById()
+    -> MySQL
+    -> store Task in Redis
+    -> return Task
+
+调用链3： 正常一步执行成功
+TaskExecutionWorker
+-> select PENDING tasks
+-> TaskExecutionAsyncService.submitTask(task)
+-> ThreadPoolTaskExecutor.execute(...)
+-> TaskExecutionService.executeSingleTask(task)
+
+Inside executeSingleTask:
+    -> TaskStateService.claimTask(taskId)
+        -> TaskMapper.claimTaskIfCurrentStatus()
+        -> PENDING -> RUNNING
+        -> started_at = CURRENT_TIMESTAMP
+        -> insert audit
+        -> evict cache
+
+    -> TaskExecutorRegistry.getExecutor(task.type)
+    -> TaskExecutor.execute(task)
+
+    if success:
+        -> TaskStateService.transitionTaskStatus(taskId, SUCCESS)
+            -> RUNNING -> SUCCESS
+            -> clear last_error_message
+            -> insert audit
+            -> evict cache
+
+
+调用链4： 执行失败 + retry
+A.执行失败
+TaskExecutionService.executeSingleTask()
+-> TaskExecutor.execute(task)
+-> executor throws exception
+-> catch exception
+-> TaskStateService.transitionTaskStatusWithError(taskId, FAILED, errorMessage)
+    -> RUNNING -> FAILED
+    -> last_error_message = normalized error
+    -> insert audit
+    -> evict cache
+
+B.Retry scheduler 后续处理
+TaskRetryScheduler
+-> TaskRetryService.retryFailedTasks()
+-> TaskMapper.selectFailedTasksForRetry()
+
+For each FAILED task:
+    if retryCount < maxRetryCount:
+        -> TaskStateService.retryTask()
+               -> FAILED -> PENDING
+               -> retryCount + 1
+               -> clear last_error_message
+               -> insert audit
+               -> evict cache
+    else:
+        -> TaskStateService.transitionTaskStatus(taskId, DEAD)
+            -> FAILED -> DEAD
+            -> preserve last_error_message
+            -> insert audit
+            -> evict cache
+
+
+调用链5：RUNNING timeout recovery
+TaskTimeoutScheduler
+-> TaskTimeoutService.markTimeOutRunningTasksAsFailed(timeoutSeconds)
+-> TaskMapper.selectTimeOutRunningTasks(timeoutSeconds)
+
+For each time-out RUNNING task:
+    -> TaskStateService.transitionTaskStatusWithError(taskId, FAILED, timeoutMessage)
+        -> RUNNING -> FAILED
+        -> last_error_message = timeout message
+        -> actor = TIMEOUT_SCANNER
+        -> reason = RUNNING_TASK_TIMED_OUT
+        -> insert audit
+        -> evict cache
+
+Later:
+    -> TaskRetryScheduler picks FAILED task
+    -> FAILED -> PENDING or DEAD
+
+
+调用链6： cache consistency
+First read:
+Client
+-> GET /api/tasks/{id}
+-> TaskService.getTaskById()
+-> Redis miss
+-> MySQL
+-> Redis stores task
+
+state mutation：
+TaskStateService / TaskService
+-> update MySQL
+-> @CacheEvict(taskCache, taskId)
+
+Next read:
+Client
+-> GET /api/tasks/{id}
+-> Redis miss
+-> MySQL latest value
+-> return latest task

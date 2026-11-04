@@ -1,0 +1,221 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-head
+spec:
+  selector:
+    app: ray-head
+  ports:
+    - name: gcs
+      port: 6379
+      targetPort: 6379
+    # ✅【改动 1】必须暴露 10001，给 API 的 ray://ray-head:10001 用
+    - name: ray-client
+      port: 10001
+      targetPort: 10001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-head
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ray-head
+  template:
+    metadata:
+      labels:
+        app: ray-head
+    spec:
+      containers:
+        - name: ray-head
+          image: worker-service:s11
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONPATH
+              value: /app
+          command: ["sh", "-lc"]
+          args:
+            - |
+              # Ray Head， 不让ray -head 跑业务即actor的视频处理，所以 加 num-cpu == 0
+              ray start --head --port=6379 --ray-client-server-port=10001 --num-cpus=0 --block
+          volumeMounts:
+            - name: video-storage
+              mountPath: /data
+        - name: actor-bootstrap
+          image: worker-service:s11
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONPATH
+              value: /app
+            - name: RAY_NAMESPACE
+              value: "video"
+            - name: MAIN_PROFILE
+              value: "480p"
+            - name: VIDEO_PROFILES
+              value: "360p,480p,720p"
+            - name: UPLOAD_EXTRA_PROFILES
+              value: "true"
+            - name: ENABLE_S3_UPLOAD
+              value: "false"
+            - name: FFMPEG_THREADS
+              value: "1"
+            - name: FFMPEG_PRESET
+              value: "ultrafast"
+          command: ["sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[bootstrap] start actor guardian"
+              python3 - <<'PY'
+              import os
+              import time
+              import traceback
+              import ray
+              from tasks.video_tasks import VideoWorker
+
+              NS = "video"
+              NAME = "video_worker"
+
+              def connect():
+                  try:
+                      ray.shutdown()
+                  except Exception:
+                      pass
+                  ray.init(address="ray://127.0.0.1:10001", namespace=NS, ignore_reinit_error=True)
+
+              while True:
+                  try:
+                      if not ray.is_initialized():
+                          connect()
+                          print("[bootstrap] cluster_resources:", ray.cluster_resources(), flush=True)
+                      try:
+                          a = ray.get_actor(NAME, namespace=NS)
+                          print(f"[bootstrap] actor exists: {a}", flush=True)
+                      except ValueError:
+                          print("[bootstrap] actor missing -> creating...", flush=True)
+                          actor_env = {
+                              key: os.environ[key]
+                              for key in (
+                                  "MAIN_PROFILE",
+                                  "VIDEO_PROFILES",
+                                  "UPLOAD_EXTRA_PROFILES",
+                                  "ENABLE_S3_UPLOAD",
+                                  "FFMPEG_THREADS",
+                                  "FFMPEG_PRESET",
+                              )
+                          }
+
+                          a = VideoWorker.options(
+                              name=NAME,
+                              lifetime="detached",
+                              num_cpus=1,
+                              max_restarts=0,
+                              max_task_retries=0,
+                              runtime_env={"env_vars": actor_env},
+                          ).remote()
+                          print(f"[bootstrap] actor created: {a}", flush=True)
+                          print("[bootstrap] created actor handle:", a, flush=True)
+
+                  except Exception as e:
+                      print("[bootstrap] error:", repr(e), flush=True)
+                      traceback.print_exc()
+                      # 断线/重启后等待再连
+                      try:
+                          ray.shutdown()
+                      except Exception:
+                          pass
+
+                  time.sleep(5)
+              PY
+      volumes:
+        - name: video-storage
+          persistentVolumeClaim:
+            claimName: video-pvc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ray-worker
+  template:
+    metadata:
+      labels:
+        app: ray-worker
+    spec:
+      containers:
+        - name: ray-worker
+          image: worker-service:s11
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          env:
+            - name: PYTHONPATH
+              value: /app
+
+            - name: ENABLE_S3_UPLOAD
+              value: "false"
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AWS_S3_BUCKET
+              value: "cloud-video-platform-processed-hongyun"
+            - name: AWS_S3_PREFIX
+              value: "processed"
+
+            # 多profiles 上传
+            - name: MAIN_PROFILE
+              value: "480p"
+            - name: VIDEO_PROFILES
+              value: "360p,480p,720p"
+            # 可选：开启 或 关掉额外上传
+            - name: UPLOAD_EXTRA_PROFILES
+              value: "true"
+
+          command: ["sh", "-lc"]
+          args:
+            - |
+              set -e
+
+              echo "[1] wait until can talk to head gcs..."
+              python3 - <<'PY'
+              import time, socket
+              def ok(host, port):
+                  s=socket.socket(); s.settimeout(1.0)
+                  try:
+                      s.connect((host, port)); return True
+                  except Exception:
+                      return False
+                  finally:
+                      try: s.close()
+                      except: pass
+
+              for i in range(60):
+                  if ok("ray-head", 6379):
+                      print("OK: ray-head:6379 reachable")
+                      break
+                  print(f"wait ray-head:6379 ... {i+1}/60")
+                  time.sleep(1)
+              else:
+                  raise SystemExit("FATAL: ray-head:6379 not reachable")
+              PY
+
+              echo "[2] start ray worker"
+              exec ray start --address=ray-head:6379 --num-cpus=1 --block
+          volumeMounts:
+            - name: video-storage
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+      volumes:
+        - name: video-storage
+          persistentVolumeClaim:
+            claimName: video-pvc

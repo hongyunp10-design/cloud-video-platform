@@ -1,0 +1,450 @@
+模块名:
+
+它解决什么问题：
+
+它依赖谁：
+
+谁依赖它：
+
+如果没有它会怎样：
+
+它不应该做什么：
+
+典型bug:
+
+对应测试：
+
+
+
+
+模块名:
+TaskController
+
+它解决什么问题：
+对外暴露HTTP API, 接收参数请求，调用Service, 返回ApiResponse
+
+它依赖谁：
+TaskService
+TaskStateAuditService / TaskStateService
+
+谁依赖它：
+外部客户端 / MockMvc controller test
+
+如果没有它会怎样：
+系统没有 HTTP 入口，只能通过 Service 或测试调用
+
+它不应该做什么：
+不应该写业务状态流转逻辑
+不应该直接操作mapper
+不应该自己判断复杂状态机
+不应该直接操作Redis cache
+
+典型bug:
+路径冲突，比如 /stats 被 {id} 捕获
+参数校验缺失
+异常没有被GlobalExeceptionHandler 正确转换
+
+对应测试：
+TaskControllerIntegrationTest.java
+TaskControllerStatsIntegrationTest.java
+
+
+模块名:
+TaskService
+
+它解决什么问题：
+处理task 的普通业务能力，包括create, getById, getAll,  update, delete, stats
+
+它依赖谁：
+TaskMapper
+Redis cache annotation
+可能依赖 DTO / model
+
+谁依赖它：
+TaskController
+测试类
+其他 service 可能读取 task
+
+如果没有它会怎样：
+controller会直接操作mapper,业务层缺失，CRUD 逻辑和缓存逻辑会分散
+
+它不应该做什么：
+不应该处理复杂状态流转
+不应该执行task
+不应该处理 retry / timeout
+不应该直接写 audit
+
+典型bug:
+getById 缓存旧数据
+update/delete 忘记evict cache
+找不到task 时没有抛 TaskNotFoundException
+stats count 不准确
+
+对应测试：
+TaskServiceStatsIntegrationTest
+TaskCacheConsistencyIntegrationTest
+TaskControllerIntegrationTest
+
+
+模块名:
+TaskStateService
+
+它解决什么问题：
+集中管理所有task的状态流转，保证状态机合法性、事务一致性、audit记录、cache eviction 和 并发安全
+
+
+它依赖谁：
+TaskMapper
+TaskStateAuditMapper
+
+谁依赖它：
+TaskExecutionService
+TaskRetryService
+TaskTimeoutService
+Controller 或 manual status update API, 如果有测试类
+
+如果没有它会怎样：
+状态更新会散落在 worker，retry ,timeout, controller里
+状态机规则难以统一
+audit 容易漏
+cache eviction 容易漏
+并发更新更难控制
+
+它不应该做什么：
+不应该知道具体 MEDIA/ EMAIL/ REPORT 怎么执行
+不应该扫描Pending task
+不应该负责定时调度
+不应该直接处理http请求
+
+
+典型bug:
+非法状态转换被允许
+合法状态转换被误拒绝
+updateRows = 0 没有处理并发冲突
+audit 插入漏掉
+@CacheEvict key 写错
+FAILED -> DEAD 错误清空 last_error_message
+retry 没有清空 last_error_message
+claim 没有写 started_at
+
+对应测试：
+TaskStateServiceIntegrationTest
+TaskCacheConsistencyIntegrationTest
+TaskExecutionAsyncServiceIntegrationTest
+TaskTimeoutServiceIntegrationTest
+
+
+模块名:
+TaskExecutionWorker
+
+它解决什么问题：
+周期性扫描 PENDING task, 并提交给async execution service
+
+它依赖谁：
+TaskMapper 或 TaskService 查询 pending tasks
+TaskExecutionAsyncService
+Worker properties
+
+谁依赖它：
+Spring Scheduler
+
+如果没有它会怎样：
+PENDING task 不会自动进入执行链路
+
+它不应该做什么：
+不应该自己执行具体任务
+不应噶自己改 task 状态为 SUCCESS/ FAILED
+不应该写 retry / timeout 逻辑
+
+典型bug:
+scheduler 在测试中偷跑
+一次扫描任务数量过大
+submit failure 没有记录
+worker 误以为 submit 成功等于执行成功
+
+
+对应测试：
+TaskWorkerRetryIntegrationTest
+
+
+
+
+模块名:
+TaskExecutionAsyncService
+
+它解决什么问题：
+把单个 task 提交到 ThreadPoolTaskExecutor 异步执行，并处理 submit 成功或 rejection
+
+它依赖谁：
+ThreadPoolTaskExecutor
+TaskExecutionService
+
+谁依赖它：
+TaskExecutionWorker
+
+如果没有它会怎样：
+worker会同步执行任务，扫描线会被阻塞
+
+它不应该做什么：
+不应该自己处理业务执行
+不应该自己改 Success / FAILED
+不应该吞掉 submit rejection
+
+典型bug:
+线程池满了 submit失败但是 worker 不知道
+异步异常没有被捕获
+重复submit 同一个 task 时 claim 保护失败
+
+对应测试：
+TaskExecutionAsyncServiceIntegrationTest
+TaskExecutionAsyncServiceTest
+
+
+
+
+模块名:
+TaskExecutionService
+
+它解决什么问题：
+编排单个task 的执行流程 ： claim task, 查找executor， 执行任务， 根据结果更新状态
+
+
+它依赖谁：
+TaskStateService
+TaskExecutionRegistry
+
+谁依赖它：
+TaskExecutionAsyncService
+
+
+如果没有它会怎样：
+claim, executor 调用，success/failure/ 状态处理会分散在 async service 或 worker中
+
+
+它不应该做什么：
+不应该扫描Pending task
+不应该管理线程池
+不应该直接写mapper 更新状态
+不应该 实现具体MEDIA/ EMIAL/ REPORT 业务逻辑
+
+
+典型bug:
+executor抛异常后没有写入 FAILED
+失败原因没有写入last_error_message
+claim 失败没有返回skipped
+找不到executor 时 状态处理不一致
+
+
+对应测试：
+TaskExecutionAsyncServiceIntegrationTest
+TaskWorkerRetryIntegrationTest
+
+
+
+
+模块名:
+TaskExecutionRegistry
+
+它解决什么问题：
+根据TaskType 找到对应 TaskExecutor, 解耦执行编排和 具体业务执行
+
+它依赖谁：
+所有 TaskExecutor implementation
+
+谁依赖它：
+TaskExecutionService
+
+如果没有它会怎样：
+TskExecutionService 里会出现 if/else 或 switch 判断不同task type， 违反开闭原则
+它不应该做什么：
+不应该执行task 流转状态
+不应该管理线程池
+不应该写数据库
+
+典型bug:
+某个TaskType 没有 executor
+重复注册同一个TaskType executor
+未知type 没有抛清晰异常
+
+对应测试：
+TaskExecutorRegistryTask
+TaskExecutionAsyncServiceIntegrationTest
+
+
+
+模块名:
+TaskRetryService
+
+它解决什么问题：
+处理failed task的重试 或 dead-letter 转换
+
+它依赖谁：
+TaskMapper
+TaskStateService
+
+
+谁依赖它：
+TaskRetryScheduler
+
+如果没有它会怎样：
+Failed task 不会被自动重试，也不会在达到重试上限后变为DEAD
+
+它不应该做什么：
+不应该处理 running timeout
+不应该执行 task
+不应该扫描 Pending task
+
+典型bug:
+retryCount 没有增加
+retry 超上限还返回 pending
+failed -》 dead 没有保留final error
+并发 retry 导致 retryCount 错乱
+
+对应测试：
+TaskRetryServiceIntegrationTest
+TaskWorkerRetryIntegrationTest
+
+
+
+模块名:
+TaskTimeoutService
+
+它解决什么问题：
+扫描超时 Running Task, 并把它们标记为 FAILED, 写入 timeout error
+
+它依赖谁：
+TaskMapper
+TaskStateService
+
+谁依赖它：
+TaskTimeoutScheduler
+
+如果没有它会怎样：
+worker crash 或线程卡死后，task 会永久停留在 RUNNING
+
+它不应该做什么：
+不应该直接把Running 改回 Pending
+不应该增加 retryCount
+不应该负责定时触发
+不应该执行task
+
+典型bug:
+Java 时间和 DB 时间不一致导致 timeout 查询失败
+timeout 后没有写 last_error_message
+scannedCount 和 timeOutCount 混淆
+并发状态变化导致 scanner 整体失败
+
+对应测试：
+TaskTimeoutServiceIntegrationTest
+TaskCacheConsistencyIntegrationTest
+
+
+模块名:
+TaskMapper
+
+它解决什么问题：
+封装 task 的表的 SQL 访问，包括 CRUD.状态更新条件、统计、pending/failed/running timeout 查询
+
+它依赖谁：
+MyBatis
+MySQL
+
+谁依赖它：
+TaskService
+TaskStateService
+TaskRetryService
+TaskTimeoutService
+
+如果没有它会怎样：
+service 层无法访问 task表，SQL 会散落在代码里
+
+
+它不应该做什么：
+不应该决定业务状态是否合法
+不应该处理 HTTP 请求
+不应该写复杂业务编排
+
+典型bug:
+resultMap 字段 和 select 字段不一致
+conditional update WHERE 条件漏 status
+insert 没返回 generated id
+枚举映射错误
+时间字段和DB 时区不一致
+
+对应测试：
+TaskMapperIntegrationTest
+TaskTimeoutServiceIntegrationTest
+TaskServiceStatsIntegrationTest
+
+
+
+模块名:
+Redis cache
+
+它解决什么问题：
+缓存 getTaskById 查询，减少重复 DB 读取
+
+它依赖谁：
+Spring Cache
+Redis
+
+谁依赖它：
+TaskService.getTaskById
+所有 mutation path 通过 @CacheEvict 间接影响它
+
+如果没有它会怎样：
+每次 getTaskById 都查DB，性能较低，但一致性更简单
+
+它不应该做什么：
+不应该作为最终事实来源
+不应该替代 MySQL
+不应该缓存后不处理失败
+
+典型bug:
+DB 已更新但 API 返回旧缓存
+delete 后 API 返回 幽灵数据
+@CacheEvict key 写错
+测试之间Cache 污染
+
+对应测试：
+TaskCacheConsistencyIntegrationTest
+
+
+
+
+
+模块名:
+Scheduler
+
+它解决什么问题：
+周期性出发后台任务， 包括 Pending task execution、 failed task retry、 running task timeout recovery
+
+它依赖谁：
+TaskExecutionWorker
+TaskRetryService
+TaskTimeoutService
+properties config
+
+谁依赖它：
+Spring scheduling framework
+
+如果没有它会怎样：
+任务不会自动执行
+失败任务不会自动重试
+卡住 Running 任务不会自动恢复
+
+它不应该做什么：
+不应该直接写mapper
+不应该直接实现状态机
+不应该包含复杂业务逻辑
+
+典型bug:
+测试环境 scheduler偷跑
+多实例部署时多个 scheduler 重复扫描
+fixedDelay 配置过小导致压力过大
+enabled 配置未生效
+
+对应测试：
+TaskRetrySchedulerTest
+TaskTimeoutSchedulerTest
+TaskWorkerRetryIntegrationTest

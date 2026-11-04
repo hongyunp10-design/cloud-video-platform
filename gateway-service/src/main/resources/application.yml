@@ -1,0 +1,12 @@
+server:
+  port: 8080
+
+# FastAPI 服务地址（K8s 内用 service name）
+app:
+  videoApiBaseUrl: http://api-service:8000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -1,0 +1,44 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3307/async_task_service_test?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: root
+    password: ${DB_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.hongyun.asynctask.model
+
+app:
+  task:
+    execution-worker:
+      enabled: false
+      initial-delay-ms: 3600000
+      batch-size: 1000
+
+    retry-scheduler:
+      enabled: false
+      initial-delay-ms: 3600000
+
+    retry-policy:
+      default-max-retry-count: 3
+      pre-type:
+        MEDIA: 2
+        EMAIL: 5
+
+    execution-async:
+      core-pool-size: 1
+      max-pool-size: 2
+      queue-capacity: 10
+      thread-name-prefix: test-task-execution-
+
+    timeout-scheduler:
+      enabled: false
+      fixed-delay-ms: 60000
+      initial-delay-ms: 60000
+      timeout-seconds: 300
