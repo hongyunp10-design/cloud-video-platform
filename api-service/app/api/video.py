@@ -149,6 +149,67 @@ async def save_file(upload: UploadFile, dst: str):
             f.write(chunk)
 
 
+@router.post("/stage")
+async def stage_video(file: UploadFile = File(...)):
+    video_id = str(uuid.uuid4())
+    input_path = f"{UPLOAD_DIR}/{video_id}.mp4"
+
+    await save_file(file, input_path)
+
+    return {
+        "video_id": video_id,
+        "status": "uploaded"
+    }
+
+
+
+@router.post("/process/{video_id}")
+def process_video(video_id: str):
+    # 1. Validate video ID
+    try:
+        video_id = str(uuid.UUID(video_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid video_id")
+
+    input_path = f"{UPLOAD_DIR}/{video_id}.mp4"
+    output_path = f"{PROCESSED_DIR}/{video_id}.mp4"
+
+    # 2. Require staged video
+    if not os.path.isfile(input_path):
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # 3. Connect to Ray
+    try:
+        ensure_ray_connected()
+        worker = ray.get_actor("video_worker", namespace=RAY_NAMESPACE)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Ray not ready: {e!r}")
+
+    # 4. Avoid duplicate submission within this API process
+    with _job_lock:
+        if video_id in _job_refs:
+            return {
+                "video_id": video_id,
+                "status": "processing",
+                "already_submitted": True
+            }
+
+        try:
+            ref = worker.process.remote(input_path, output_path, video_id)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Submit failed: {e!r}")
+
+        _job_refs[video_id] = ref
+        _job_errors.pop(video_id, None)
+        _job_done_ts.pop(video_id, None)
+
+    return {
+        "video_id": video_id,
+        "status": "processing",
+        "already_submitted": False
+    }
+
+
 @router.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
     video_id = str(uuid.uuid4())
@@ -170,7 +231,7 @@ async def upload_video(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail=f"Ray actor not ready: {e!r}")
 
     try:
-        ref = worker.process.remote(input_path, output_path)
+        ref = worker.process.remote(input_path, output_path, video_id)
         with _job_lock:
             _job_refs[video_id] = ref
             _job_errors.pop(video_id, None)

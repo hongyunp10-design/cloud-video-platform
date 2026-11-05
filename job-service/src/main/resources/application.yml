@@ -33,7 +33,7 @@ app:
       fixed-delay-ms: 30000
 
     execution-worker:
-      enabled: false
+      enabled: true
       fixed-delay-ms: 10000
       batch-size: 5
 
