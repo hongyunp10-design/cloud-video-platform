@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.hongyun.asynctask.mapper.MediaTaskMapper">
+
+    <insert id="insertMediaTask">
+        INSERT INTO media_task (
+        task_id,
+        video_id
+        )
+        VALUES (
+        #{taskId},
+        #{videoId}
+        )
+    </insert>
+
+    <select id="selectVideoIdByTaskId" resultType="string">
+        SELECT video_id
+        FROM media_task
+        WHERE task_id = #{taskId}
+    </select>
+
+</mapper>

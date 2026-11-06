@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3307/async_task_service_test?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    url: jdbc:mysql://localhost:3307/cloud_video_platform_test?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
     username: root
     password: ${DB_PASSWORD:123456}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -27,7 +27,7 @@ app:
 
     retry-policy:
       default-max-retry-count: 3
-      pre-type:
+      per-type:
         MEDIA: 2
         EMAIL: 5
 
