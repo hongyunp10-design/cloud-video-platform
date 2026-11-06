@@ -1,0 +1,61 @@
+
+name: Job Service CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  java-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_test_password
+          MYSQL_DATABASE: cloud_video_platform_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_test_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: job-service/pom.xml
+
+      - name: Compile and run integration tests
+        working-directory: job-service
+        env:
+          SPRING_PROFILES_ACTIVE: test
+          DB_PASSWORD: ci_test_password
+        run: |
+          mvn -B -ntp \
+            -Dtest=MediaTaskMapperIntegrationTest,MediaTaskServiceIntegrationTest \
+            test
