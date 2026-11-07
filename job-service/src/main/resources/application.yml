@@ -21,6 +21,9 @@ mybatis:
   type-aliases-package: com.hongyun.asynctask.model
 
 app:
+  video-api:
+    base-url: ${VIDEO_API_BASE_URL:http://localhost:18001}
+
   task:
     retry-policy:
       default-max-retry-count: 3
