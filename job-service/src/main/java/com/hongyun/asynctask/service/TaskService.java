@@ -120,6 +120,10 @@ public class TaskService {
         );
     }
 
+    public void retryFailedTask(Long id) {
+        taskRetryService.retrySingleFailedTask(id);
+    }
+
     public TaskStatsResponse getTaskStats() {
         long pendingCount = taskMapper.countTasksByStatus(TaskStatus.PENDING);
         long runningCount = taskMapper.countTasksByStatus(TaskStatus.RUNNING);

@@ -99,6 +99,21 @@ public class TaskController {
         );
     }
 
+    @PostMapping("/{id}/retry")
+    public ApiResponse<Void> retryFailedTask(
+            @PathVariable Long id
+    ) {
+        log.info("Manual single task retry requested: taskId={}", id);
+
+        taskService.retryFailedTask(id);
+
+        return ApiResponse.success(
+                "Single task retry check completed",
+                null
+        );
+    }
+
+
     @GetMapping("/{id}/audits")
     public ApiResponse<List<TaskStateAudit>> getTaskStateAudits(
             @PathVariable Long id,
