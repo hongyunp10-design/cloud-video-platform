@@ -13,9 +13,9 @@
     </parent>
 
     <groupId>com.hongyun</groupId>
-    <artifactId>async-task-service</artifactId>
+    <artifactId>job-service</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>async-task-service</name>
+    <name>job-service</name>
     <description>Async Task Processing Service</description>
 
     <properties>
