@@ -356,6 +356,75 @@ public class TaskStateService {
         return true;
     }
 
+    /**
+     * Fail a timed-out task only if the scanned execution
+     * attempt is still current and still timed out.
+     *
+     * @return true if the task was marked FAILED;
+     *         false if the scanned snapshot is stale.
+     */
+    @Transactional
+    @CacheEvict(value = "taskCache", key = "#p0.id")
+    public boolean failTimedOutRunningAttempt(
+            Task scannedTask,
+            long timeoutSeconds,
+            TaskStateChangeContext context,
+            String errorMessage
+    ) {
+        // 1. Validate the scanned snapshot.
+        if (scannedTask == null
+                || scannedTask.getId() == null
+                || scannedTask.getStatus() != TaskStatus.RUNNING
+                || scannedTask.getStartedAt() == null) {
+            throw new IllegalArgumentException(
+                    "Expected a scanned RUNNING task with startedAt"
+            );
+        }
+
+        String normalizedError = normalizeLastErrorMessage(errorMessage);
+
+        // 2. Atomically verify the original snapshot and timeout.
+        int updatedRows = taskMapper.failTimedOutRunningAttempt(
+                scannedTask,
+                timeoutSeconds,
+                normalizedError
+        );
+
+        // 3. The task may have completed or started a new attempt.
+        if (updatedRows == 0) {
+            log.info(
+                    "Stale timeout scan ignored: taskId={}, " +
+                            "retryCount={}, startedAt={}",
+                    scannedTask.getId(),
+                    scannedTask.getRetryCount(),
+                    scannedTask.getStartedAt()
+            );
+
+            return false;
+        }
+
+        // 4. Only a successful state transition produces an audit.
+        insertTaskStateAudit(
+                scannedTask.getId(),
+                TaskStatus.RUNNING,
+                TaskStatus.FAILED,
+                context,
+                scannedTask.getRetryCount(),
+                scannedTask.getMaxRetryCount()
+        );
+
+        log.info(
+                "Timed-out task marked FAILED: taskId={}, " +
+                        "retryCount={}, startedAt={}, actor={}, reason={}",
+                scannedTask.getId(),
+                scannedTask.getRetryCount(),
+                scannedTask.getStartedAt(),
+                context.getActor(),
+                context.getReason()
+        );
+
+        return true;
+    }
 
     private void validateStatusTransition(TaskStatus currentStatus, TaskStatus targetStatus) {
         Set<TaskStatus> allowedTargets = ALLOWED_TRANSITIONS.getOrDefault(currentStatus, Set.of());

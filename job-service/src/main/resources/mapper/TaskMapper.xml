@@ -201,6 +201,23 @@
         ORDER BY started_at ASC
     </select>
 
+    <!-- Fail only the same execution attempt found by the timeout scan. -->
+    <update id="failTimedOutRunningAttempt">
+        UPDATE task
+        SET
+        status = 'FAILED',
+        last_error_message = #{lastErrorMessage}
+        WHERE id = #{task.id}
+        AND status = 'RUNNING'
+        AND retry_count = #{task.retryCount}
+        AND started_at = #{task.startedAt}
+        AND TIMESTAMPDIFF(
+        SECOND,
+        started_at,
+        CURRENT_TIMESTAMP
+        ) > #{timeoutSeconds}
+    </update>
+
     <update id="updateTaskStartedAt">
         UPDATE task
         SET started_at = #{startedAt}

@@ -55,4 +55,4 @@ jobs:
         env:
           SPRING_PROFILES_ACTIVE: test
           DB_PASSWORD: ci_test_password
-        run: mvn -B -ntp -Dtest=MediaTaskMapperIntegrationTest,MediaTaskServiceIntegrationTest,TaskAttemptFencingIntegrationTest test
+        run: mvn -B -ntp -Dtest=MediaTaskMapperIntegrationTest,MediaTaskServiceIntegrationTest,TaskAttemptFencingIntegrationTest,TaskTimeoutRaceIntegrationTest test

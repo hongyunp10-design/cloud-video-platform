@@ -1,8 +1,6 @@
 package com.hongyun.asynctask.service;
 
 import com.hongyun.asynctask.dto.response.RunningTaskTimeoutResponse;
-import com.hongyun.asynctask.exception.ConcurrentTaskStateChangeException;
-import com.hongyun.asynctask.exception.InvalidTaskStateTransitionException;
 import com.hongyun.asynctask.mapper.TaskMapper;
 import com.hongyun.asynctask.model.*;
 import org.slf4j.Logger;
@@ -34,41 +32,46 @@ public class TaskTimeoutService {
         return markTimedOutRunningTasksAsFailed(DEFAULT_RUNNING_TIMEOUT_SECONDS);
     }
 
-    public RunningTaskTimeoutResponse markTimedOutRunningTasksAsFailed(long timeoutSeconds) {
-        List<Task> timeOutTasks = taskMapper.selectTimedOutRunningTasks(timeoutSeconds);
+    public RunningTaskTimeoutResponse markTimedOutRunningTasksAsFailed(
+            long timeoutSeconds
+    ) {
+        // 1. Find RUNNING tasks that exceeded the timeout.
+        List<Task> timedOutTasks =
+                taskMapper.selectTimedOutRunningTasks(timeoutSeconds);
 
-        List<Long> timeOutTaskIds = new ArrayList<>();
+        List<Long> timedOutTaskIds = new ArrayList<>();
 
-        for (Task task : timeOutTasks) {
-            try {
-                Task failedTask = taskStateService.transitionTaskStatusWithError(
-                        task.getId(),
-                        TaskStatus.FAILED,
-                        TaskStateChangeContext.of(
-                                TaskStateActor.TIMEOUT_SCANNER,
-                                TaskStateChangeReason.RUNNING_TASK_TIMED_OUT
-                        ),
-                        buildTimeoutMessage(task, timeoutSeconds)
-                );
+        // 2. Process each originally scanned task snapshot.
+        for (Task scannedTask : timedOutTasks) {
 
-                timeOutTaskIds.add(failedTask.getId());
-            }catch (InvalidTaskStateTransitionException | ConcurrentTaskStateChangeException ex) {
-                // Task was changed by worker or another scanner after being selected.
-                // Safe to skip this task in current scan.
-                log.info(
-                        "Skip timed out task because state changed concurrently: taskId={}, message={}",
-                        task.getId(),
-                        ex.getMessage()
-                );
+            TaskStateChangeContext context =
+                    TaskStateChangeContext.of(
+                            TaskStateActor.TIMEOUT_SCANNER,
+                            TaskStateChangeReason.RUNNING_TASK_TIMED_OUT
+                    );
+
+            // 3. Atomically verify the attempt and timeout condition.
+            // A stale scan must not fail a newer execution attempt.
+            boolean updated = taskStateService.failTimedOutRunningAttempt(
+                    scannedTask,
+                    timeoutSeconds,
+                    context,
+                    buildTimeoutMessage(scannedTask, timeoutSeconds)
+            );
+
+            // 4. Count only successfully failed tasks.
+            if (updated) {
+                timedOutTaskIds.add(scannedTask.getId());
             }
         }
 
         return new RunningTaskTimeoutResponse(
-                timeOutTasks.size(),
-                timeOutTaskIds.size(),
-                timeOutTaskIds
+                timedOutTasks.size(),
+                timedOutTaskIds.size(),
+                timedOutTaskIds
         );
     }
+
 
     private String buildTimeoutMessage(Task task, long timeoutSeconds) {
         return "Task execution timed out after "

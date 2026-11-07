@@ -81,4 +81,17 @@ public interface TaskMapper {
             @Param("toStatus") TaskStatus toStatus,
             @Param("lastErrorMessage") String lastErrorMessage
     );
+
+    /**
+     * Mark a running task as FAILED only if the originally
+     * scanned execution attempt is still running and timed out.
+     *
+     * @return 1 if updated, 0 if the snapshot is stale
+     */
+    int failTimedOutRunningAttempt(
+            @Param("task") Task task,
+            @Param("timeoutSeconds") long timeoutSeconds,
+            @Param("lastErrorMessage") String lastErrorMessage
+    );
+
 }
