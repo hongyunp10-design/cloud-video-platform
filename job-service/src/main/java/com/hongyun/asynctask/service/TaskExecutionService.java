@@ -24,31 +24,51 @@ public class TaskExecutionService {
     }
 
     public TaskExecutionResult executeSingleTask(Task task) {
+
+        Long taskId = task.getId();
+
         log.info(
                 "Task execution started: taskId={}, type={}, name={}",
-                task.getId(),
+                taskId,
                 task.getType(),
                 task.getName()
         );
 
         Task claimedTask;
+
+        // 1. Atomically claim the pending task.
         try {
-            claimedTask = taskStateService.claimTask(task.getId());
-        }catch (ConcurrentTaskStateChangeException | InvalidTaskStateTransitionException ex) {
+            claimedTask = taskStateService.claimTask(taskId);
+
+        } catch (ConcurrentTaskStateChangeException |
+                 InvalidTaskStateTransitionException ex) {
+
             log.info(
-                    "Task execution skipped because claim failed: taskId={}, reason={}",
-                    task.getId(),
+                    "Task claim skipped: taskId={}, reason={}",
+                    taskId,
                     ex.getMessage()
             );
-            return TaskExecutionResult.skipped(task.getId());
+
+            return TaskExecutionResult.skipped(taskId);
         }
 
+        // 2. Capture the attempt identity at claim time.
+        // Never re-read the latest retryCount when finishing.
+        int expectedRetryCount = claimedTask.getRetryCount();
+
+        // 3. Execute the workload.
         try {
-            TaskExecutor taskExecutor = taskExecutorRegistry.getExecutor(claimedTask.getType());
-            taskExecutor.execute(claimedTask);
-        }catch (Exception ex) {
-            Task failedTask = taskStateService.transitionTaskStatusWithError(
-                    claimedTask.getId(),
+            TaskExecutor executor =
+                    taskExecutorRegistry.getExecutor(claimedTask.getType());
+
+            executor.execute(claimedTask);
+
+        } catch (Exception ex) {
+
+            // 4. Only the current attempt may report FAILED.
+            boolean finalized = taskStateService.finishClaimedTask(
+                    taskId,
+                    expectedRetryCount,
                     TaskStatus.FAILED,
                     TaskStateChangeContext.of(
                             TaskStateActor.WORKER,
@@ -56,32 +76,59 @@ public class TaskExecutionService {
                     ),
                     ex.getMessage()
             );
+
+            if (!finalized) {
+                log.warn(
+                        "Stale FAILED result ignored: taskId={}, attempt={}",
+                        taskId,
+                        expectedRetryCount
+                );
+
+                return TaskExecutionResult.skipped(taskId);
+            }
+
             log.warn(
-                    "Task execution failed: task={}, type={}, finalStatus={}, reason={}",
-                    failedTask.getId(),
-                    failedTask.getType(),
-                    failedTask.getStatus(),
-                    failedTask.getLastErrorMessage(),
+                    "Task execution failed: taskId={}, attempt={}, reason={}",
+                    taskId,
+                    expectedRetryCount,
+                    ex.getMessage(),
                     ex
             );
-            return new TaskExecutionResult(claimedTask.getId(), TaskStatus.FAILED);
+
+            return new TaskExecutionResult(taskId, TaskStatus.FAILED);
         }
 
-        taskStateService.transitionTaskStatus(
-                claimedTask.getId(),
+        // 5. Only the current attempt may report SUCCESS.
+        boolean finalized = taskStateService.finishClaimedTask(
+                taskId,
+                expectedRetryCount,
                 TaskStatus.SUCCESS,
                 TaskStateChangeContext.of(
-                TaskStateActor.WORKER,
-                TaskStateChangeReason.WORKER_EXECUTION_SUCCEEDED
-                )
+                        TaskStateActor.WORKER,
+                        TaskStateChangeReason.WORKER_EXECUTION_SUCCEEDED
+                ),
+                null
         );
 
+        if (!finalized) {
+            log.warn(
+                    "Stale SUCCESS result ignored: taskId={}, attempt={}",
+                    taskId,
+                    expectedRetryCount
+            );
+
+            return TaskExecutionResult.skipped(taskId);
+        }
+
         log.info(
-                "Task execution completed: taskId={}, type={}, finalStatus={}",
-                claimedTask.getId(),
+                "Task execution completed: taskId={}, type={}, attempt={}, finalStatus={}",
+                taskId,
                 claimedTask.getType(),
+                expectedRetryCount,
                 TaskStatus.SUCCESS
         );
-        return  new TaskExecutionResult(claimedTask.getId(), TaskStatus.SUCCESS);
+
+        return new TaskExecutionResult(taskId, TaskStatus.SUCCESS);
     }
+
 }

@@ -74,4 +74,11 @@ public interface TaskMapper {
             @Param("id") Long id,
             @Param("offsetSeconds") long offsetSeconds
     );
+
+    int finishRunningTaskIfCurrentAttempt(
+            @Param("id") Long id,
+            @Param("expectedRetryCount") int expectedRetryCount,
+            @Param("toStatus") TaskStatus toStatus,
+            @Param("lastErrorMessage") String lastErrorMessage
+    );
 }

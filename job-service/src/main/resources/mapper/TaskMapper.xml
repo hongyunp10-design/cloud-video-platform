@@ -171,6 +171,17 @@
             AND status = #{fromStatus}
     </update>
 
+    <!-- Finish a task only if this execution attempt is still current. -->
+    <update id="finishRunningTaskIfCurrentAttempt">
+        UPDATE task
+        SET
+        status = #{toStatus},
+        last_error_message = #{lastErrorMessage}
+        WHERE id = #{id}
+        AND status = 'RUNNING'
+        AND retry_count = #{expectedRetryCount}
+    </update>
+
     <select id="selectTimedOutRunningTasks" resultMap="TaskResultMap">
         SELECT
             id,

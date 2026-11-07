@@ -57,5 +57,4 @@ jobs:
           DB_PASSWORD: ci_test_password
         run: |
           mvn -B -ntp \
-            -Dtest=MediaTaskMapperIntegrationTest,MediaTaskServiceIntegrationTest \
-            test
+            -Dtest=MediaTaskMapperIntegrationTest,MediaTaskServiceIntegrationTest,TaskAttemptFencingIntegrationTest

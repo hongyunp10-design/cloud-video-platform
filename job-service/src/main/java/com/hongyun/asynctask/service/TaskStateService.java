@@ -279,6 +279,83 @@ public class TaskStateService {
         return claimedTask;
     }
 
+    /**
+     * Finish a running task only if the execution attempt
+     * is still current.
+     *
+     * @return true if the state was updated;
+     *         false if this attempt is stale.
+     */
+    @Transactional
+    @CacheEvict(value = "taskCache", key = "#taskId")
+    public boolean finishClaimedTask(
+            Long taskId,
+            int expectedRetryCount,
+            TaskStatus targetStatus,
+            TaskStateChangeContext context,
+            String errorMessage
+    ) {
+        // 1. Only execution terminal states are allowed.
+        if (targetStatus != TaskStatus.SUCCESS
+                && targetStatus != TaskStatus.FAILED) {
+            throw new IllegalArgumentException(
+                    "Expected SUCCESS or FAILED, got: " + targetStatus
+            );
+        }
+
+        Task task = taskMapper.selectTaskById(taskId);
+
+        if (task == null) {
+            throw new TaskNotFoundException(taskId);
+        }
+
+        // 2. Normalize the error message for FAILED.
+        // SUCCESS always clears the previous error.
+        String normalizedError = targetStatus == TaskStatus.FAILED
+                ? normalizeLastErrorMessage(errorMessage)
+                : null;
+
+        // 3. Atomic CAS: RUNNING + matching execution attempt.
+        int updatedRows = taskMapper.finishRunningTaskIfCurrentAttempt(
+                taskId,
+                expectedRetryCount,
+                targetStatus,
+                normalizedError
+        );
+
+        // 4. A stale worker must not modify state or create an audit.
+        if (updatedRows == 0) {
+            log.info(
+                    "Stale execution attempt rejected: taskId={}, " +
+                            "expectedRetryCount={}, targetStatus={}",
+                    taskId,
+                    expectedRetryCount,
+                    targetStatus
+            );
+            return false;
+        }
+
+        // 5. State update and audit share the same transaction.
+        insertTaskStateAudit(
+                taskId,
+                TaskStatus.RUNNING,
+                targetStatus,
+                context,
+                expectedRetryCount,
+                task.getMaxRetryCount()
+        );
+
+        log.info(
+                "Task execution finalized: taskId={}, " +
+                        "retryCount={}, finalStatus={}",
+                taskId,
+                expectedRetryCount,
+                targetStatus
+        );
+
+        return true;
+    }
+
 
     private void validateStatusTransition(TaskStatus currentStatus, TaskStatus targetStatus) {
         Set<TaskStatus> allowedTargets = ALLOWED_TRANSITIONS.getOrDefault(currentStatus, Set.of());
