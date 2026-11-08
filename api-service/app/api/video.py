@@ -34,6 +34,54 @@ router = APIRouter()
 
 UPLOAD_DIR = "/data/uploads"
 PROCESSED_DIR = "/data/processed"
+
+def is_video_completed(video_id: str) -> bool:
+    """
+    Verify completion using the persistent worker manifest.
+
+    MP4 files alone are not sufficient because S3 upload
+    may have failed after FFmpeg finished.
+    """
+    manifest_path = f"{PROCESSED_DIR}/{video_id}_manifest.json"
+
+    required_paths = {
+        f"{PROCESSED_DIR}/{video_id}.mp4",
+        f"{PROCESSED_DIR}/{video_id}_360p.mp4",
+        f"{PROCESSED_DIR}/{video_id}_720p.mp4",
+    }
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        if manifest.get("video_id") != video_id:
+            return False
+
+        if manifest.get("status") != "done":
+            return False
+
+        # Verify that the manifest records all required outputs.
+        recorded_paths = {
+            item.get("path")
+            for item in manifest.get("outputs", [])
+            if isinstance(item, dict)
+        }
+
+        if not required_paths.issubset(recorded_paths):
+            return False
+
+        # Verify outputs still exist and are not empty.
+        for path in required_paths:
+            if not os.path.isfile(path):
+                return False
+            if os.path.getsize(path) < 1024:
+                return False
+
+        return True
+
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
@@ -174,6 +222,15 @@ def process_video(video_id: str):
     input_path = f"{UPLOAD_DIR}/{video_id}.mp4"
     output_path = f"{PROCESSED_DIR}/{video_id}.mp4"
 
+    # An already completed job must not be submitted to Ray again.
+    # Manifest is persistent even if the Python API process restarts.
+    if is_video_completed(video_id):
+        return {
+            "video_id": video_id,
+            "status": "done",
+            "already_submitted": True,
+        }
+
     # 2. Require staged video
     if not os.path.isfile(input_path):
         raise HTTPException(status_code=404, detail="Video not found")
@@ -188,20 +245,39 @@ def process_video(video_id: str):
     # 4. Avoid duplicate submission within this API process
     with _job_lock:
         if video_id in _job_refs:
+            # An active/completed attempt should not be submitted twice.
+            if video_id not in _job_errors:
+                return {
+                    "video_id": video_id,
+                    "status": "processing",
+                    "already_submitted": True,
+                }
+
+            # The previous attempt failed and its error was observed.
+            # Allow Java's next retry to start a new Ray execution.
+            _job_refs.pop(video_id, None)
+
+        # Re-check completion before submitting to Ray.
+        # The job may have finished since the first check.
+        if is_video_completed(video_id):
             return {
                 "video_id": video_id,
-                "status": "processing",
-                "already_submitted": True
+                "status": "done",
+                "already_submitted": True,
             }
 
         try:
             ref = worker.process.remote(input_path, output_path, video_id)
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"Submit failed: {e!r}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Submit failed: {e!r}"
+            )
 
         _job_refs[video_id] = ref
         _job_errors.pop(video_id, None)
         _job_done_ts.pop(video_id, None)
+
 
     return {
         "video_id": video_id,
@@ -288,16 +364,46 @@ def status(video_id: str):
             # status 本身不能把服务打挂，返回 processing 并带上提示
             return {"video_id": video_id, "status": "processing", "detail": f"status_check_error: {e!r}"}
 
-    # 2) fallback：API 重启后没有 ref 的情况——用“产物齐全”判断，避免误报 done
-    required = [
-        f"{PROCESSED_DIR}/{video_id}.mp4",
-        f"{PROCESSED_DIR}/{video_id}_360p.mp4",
-        f"{PROCESSED_DIR}/{video_id}_720p.mp4",
-    ]
-    missing = [p for p in required if not os.path.exists(p)]
-    if missing:
-        return {"video_id": video_id, "status": "processing", "detail": f"missing_outputs={missing}"}
-    return {"video_id": video_id, "status": "done"}
+    # 2) Fallback: recover execution status from persistent manifest.
+    if is_video_completed(video_id):
+        return {
+            "video_id": video_id,
+            "status": "done",
+        }
+
+    manifest_path = f"{PROCESSED_DIR}/{video_id}_manifest.json"
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        manifest = None
+
+    # A failed worker execution remains failed after API restart.
+    if (
+        isinstance(manifest, dict)
+        and manifest.get("video_id") == video_id
+        and manifest.get("status") == "failed"
+    ):
+        errors = manifest.get("errors", [])
+        error_message = (
+            str(errors[-1])
+            if isinstance(errors, list) and errors
+            else "Video processing failed"
+        )
+
+        return {
+            "video_id": video_id,
+            "status": "failed",
+            "error": error_message,
+        }
+
+    # Missing/incomplete manifest: cannot confirm completion.
+    return {
+        "video_id": video_id,
+        "status": "processing",
+        "detail": "completion_not_verified",
+    }
 
 
 @router.post("/genai/run")
