@@ -24,14 +24,19 @@ public class MediaTaskController {
     public ResponseEntity<Task> createMediaTask(
             @Valid @RequestBody CreateMediaTaskRequest request
     ) {
-        Task task = mediaTaskService.createMediaTask(
-                request.name(),
-                request.videoId()
-        );
+        MediaTaskService.MediaTaskCreationResult result =
+                mediaTaskService.createMediaTaskWithResult(
+                        request.name(),
+                        request.videoId()
+                );
+
+        HttpStatus status = result.created()
+                ? HttpStatus.CREATED
+                : HttpStatus.OK;
 
         return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(task);
+                .status(status)
+                .body(result.task());
     }
 
     public record CreateMediaTaskRequest(

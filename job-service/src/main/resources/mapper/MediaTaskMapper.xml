@@ -22,4 +22,10 @@
         WHERE task_id = #{taskId}
     </select>
 
+    <!-- Look up an existing task by the unique video ID. -->
+    <select id="selectTaskIdByVideoId" resultType="java.lang.Long">
+        SELECT task_id
+        FROM media_task
+        WHERE video_id = #{videoId}
+    </select>
 </mapper>

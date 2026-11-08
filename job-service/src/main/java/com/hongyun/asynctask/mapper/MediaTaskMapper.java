@@ -15,4 +15,12 @@ public interface MediaTaskMapper {
     String selectVideoIdByTaskId(
             @Param("taskId") Long taskId
     );
+
+    /**
+     * Find the existing task ID for a staged video.
+     * Returns null if no media task exists.
+     */
+    Long selectTaskIdByVideoId(
+            @Param("videoId") String videoId
+    );
 }

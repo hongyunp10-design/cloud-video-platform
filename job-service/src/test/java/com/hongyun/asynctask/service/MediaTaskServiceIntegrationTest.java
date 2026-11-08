@@ -2,11 +2,9 @@
 package com.hongyun.asynctask.service;
 
 import com.hongyun.asynctask.mapper.MediaTaskMapper;
-import com.hongyun.asynctask.model.Task;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -28,56 +26,53 @@ class MediaTaskServiceIntegrationTest {
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    void shouldCommitAndRollbackMediaTaskTransaction() {
-
+    void duplicateMediaTaskShouldReturnExistingTask() {
         String videoId = UUID.randomUUID().toString();
 
-        // 1. Successful transaction.
-        Task task = mediaTaskService.createMediaTask(
-                "media-transaction-test",
+        // 1. First submission creates a new task.
+        var first = mediaTaskService.createMediaTaskWithResult(
+                "first-submission",
                 videoId
         );
 
-        try {
-            assertNotNull(task.getId());
+        assertTrue(first.created());
 
-            assertEquals(
-                    videoId,
-                    mediaTaskMapper.selectVideoIdByTaskId(task.getId())
-            );
+        Long firstTaskId = first.task().getId();
 
-            // 2. Record database row counts.
-            Integer tasksBefore = countRows("task");
-            Integer mediaBefore = countRows("media_task");
+        // 2. Record task count before retrying.
+        Long taskCountBefore = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM task",
+                Long.class
+        );
 
-            // 3. Duplicate videoId violates UNIQUE constraint.
-            assertThrows(
-                    DataIntegrityViolationException.class,
-                    () -> mediaTaskService.createMediaTask(
-                            "duplicate-media-test",
-                            videoId
-                    )
-            );
+        // 3. Retry the same videoId.
+        var second = mediaTaskService.createMediaTaskWithResult(
+                "duplicate-submission",
+                videoId
+        );
 
-            // 4. Both tables must remain unchanged.
-            assertEquals(tasksBefore, countRows("task"));
-            assertEquals(mediaBefore, countRows("media_task"));
+        // 4. Idempotent response: same task, not newly created.
+        assertFalse(second.created());
+        assertEquals(firstTaskId, second.task().getId());
 
-            // Original association must still exist.
-            assertEquals(
-                    videoId,
-                    mediaTaskMapper.selectVideoIdByTaskId(task.getId())
-            );
+        // 5. No additional task was created.
+        Long taskCountAfter = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM task",
+                Long.class
+        );
 
-        } finally {
-            // 5. Clean up committed test data.
-            // FK cascade deletes the media_task row.
-            jdbcTemplate.update(
-                    "DELETE FROM task WHERE id = ?",
-                    task.getId()
-            );
-        }
+        assertEquals(taskCountBefore, taskCountAfter);
+
+        // 6. Only one media_task association exists.
+        Long mediaCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM media_task WHERE video_id = ?",
+                Long.class,
+                videoId
+        );
+
+        assertEquals(1L, mediaCount);
     }
+
 
     private Integer countRows(String table) {
         // Only called with fixed test-controlled table names.
