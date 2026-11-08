@@ -71,6 +71,23 @@ def assert_file_ready(path: str, stage: str, min_bytes: int = 10) -> None:
         raise RuntimeError(f"{stage}: output too small ({sz} bytes): {path}")
 
 
+def log_event(event: str, **fields) -> None:
+    """Structured log line (JSON) to stdout for kubectl logs."""
+    rec = {
+        "ts": time.time(),
+        "event": event,
+        "hostname": socket.gethostname(),
+        **fields,
+    }
+    print(json.dumps(rec, ensure_ascii=False), flush=True)
+
+def write_manifest_atomic(path: str, payload: dict) -> None:
+    """Write JSON manifest atomically (tmp -> os.replace)."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
 #
 # ====== Multi-profile transcoding (MINIMAL) ======
 # MAIN_PROFILE 决定 output_path 这个“主文件”的分辨率（必须生成，用于你现有闭环 done 判断）
@@ -171,51 +188,110 @@ def _ffmpeg_cmd(input_path: str, vf: str, out_path: str) -> list[str]:
 
 @ray.remote
 class VideoWorker:
-    def process(self, input_path: str, output_path: str):
-        print("[worker] start process:", input_path, flush=True)
 
-        # 1) 先生成主文件（output_path 必须存在，保证你现有闭环不变）
-        vf_main = PROFILE_VF.get(MAIN_PROFILE, PROFILE_VF["480p"])
-        cmd_main = _ffmpeg_cmd(input_path=input_path, vf=vf_main, out_path=output_path)
-        subprocess.run(cmd_main, check=True)
-        print("[worker] ffmpeg_main done:", output_path, flush=True)
+    def process(self, input_path: str, output_path: str, request_id: str) -> str:
+        # Minimal observability: per-job manifest + structured logs (stdout)
+        t0 = time.time()
+        video_id = os.path.splitext(os.path.basename(output_path))[0]
+        manifest_path = os.path.join(PROCESSED_DIR, f"{video_id}_manifest.json")
 
-        # 2) 生成额外 profiles：{vid}_{profile}.mp4
-        base, ext = os.path.splitext(output_path)
-        extra_outputs: list[str] = []
-        for p in VIDEO_PROFILES:
-            if p == MAIN_PROFILE:
-                continue
-            vf = PROFILE_VF.get(p)
-            if not vf:
-                print("[worker] skip unknown profile:", p, flush=True)
-                continue
-            out_p = f"{base}_{p}{ext}"
-            cmd_extra = _ffmpeg_cmd(input_path=input_path, vf=vf, out_path=out_p)
-            subprocess.run(cmd_extra, check=True)
-            extra_outputs.append(out_p)
-            print("[worker] ffmpeg_extra done:", out_p, flush=True)
+        payload = {
+            "video_id": video_id,
+            "request_id": request_id,
+            "status": "processing",
+            "started_ts": t0,
+            "finished_ts": None,
+            "latency_ms": None,
+            "hostname": socket.gethostname(),
+            "module_file": __file__,
+            "main_profile": MAIN_PROFILE,
+            "video_profiles": VIDEO_PROFILES,
+            "outputs": [],          # [{"profile": "480p", "path": "...", "size_bytes": 123}]
+            "s3_uploads": [],       # [{"key": "...", "ok": True}]
+            "errors": [],           # [repr(e), ...]
+        }
 
-        # 3) S3 上传：主文件必传；额外文件按开关传
-        cfg = _get_s3_cfg()
-        if cfg.get("enabled"):
-            # ✅ 仍然在方法/actor 内部按需创建 boto3 client（避免 Ray 序列化 SSLContext 的坑）
-            s3 = boto3.client("s3", region_name=cfg["region"])
+        # write initial manifest early (helps post-mortem if pod dies mid-job)
+        write_manifest_atomic(manifest_path, payload)
+        log_event("video_job_start", video_id=video_id, request_id=request_id, input_path=input_path, output_path=output_path)
 
-            key_main = f"{cfg['prefix']}/{os.path.basename(output_path)}"
-            print("[s3] uploading:", key_main, flush=True)
-            upload_with_verify(s3, cfg["bucket"], key_main, output_path, retries=2)
-            print("[s3] upload main done", flush=True)
+        try:
+            # 1) Generate main output (must exist; preserves your current done semantics)
+            vf_main = PROFILE_VF.get(MAIN_PROFILE, PROFILE_VF["480p"])
+            cmd_main = _ffmpeg_cmd(input_path=input_path, vf=vf_main, out_path=output_path)
+            subprocess.run(cmd_main, check=True)
+            assert_file_ready(output_path, stage="ffmpeg_main", min_bytes=1024)
 
-            if cfg.get("upload_extra"):
-                for out_p in extra_outputs:
-                    k = f"{cfg['prefix']}/{os.path.basename(out_p)}"
-                    print("[s3] uploading:", k, flush=True)
-                    upload_with_verify(s3, cfg["bucket"], k, out_p, retries=2)
-                print("[s3] upload extra done", flush=True)
+            payload["outputs"].append({
+                "profile": MAIN_PROFILE,
+                "path": output_path,
+                "size_bytes": os.path.getsize(output_path),
+            })
+            write_manifest_atomic(manifest_path, payload)
+            log_event("ffmpeg_main_done", video_id=video_id, request_id=request_id, path=output_path, profile=MAIN_PROFILE)
 
-        return output_path
+            # 2) Extra profiles: {vid}_{profile}.mp4
+            base, ext = os.path.splitext(output_path)
+            extra_outputs: list[str] = []
+            for p in VIDEO_PROFILES:
+                if p == MAIN_PROFILE:
+                    continue
+                vf = PROFILE_VF.get(p)
+                if not vf:
+                    log_event("ffmpeg_profile_skip_unknown", video_id=video_id, request_id=request_id, profile=p)
+                    continue
 
+                out_p = f"{base}_{p}{ext}"
+                cmd_extra = _ffmpeg_cmd(input_path=input_path, vf=vf, out_path=out_p)
+                subprocess.run(cmd_extra, check=True)
+                assert_file_ready(out_p, stage=f"ffmpeg_{p}", min_bytes=1024)
+
+                extra_outputs.append(out_p)
+                payload["outputs"].append({
+                    "profile": p,
+                    "path": out_p,
+                    "size_bytes": os.path.getsize(out_p),
+                })
+                write_manifest_atomic(manifest_path, payload)
+                log_event("ffmpeg_extra_done", video_id=video_id, request_id=request_id, path=out_p, profile=p)
+
+            # 3) S3 upload (optional): upload main; extra based on flag
+            cfg = _get_s3_cfg()
+            if cfg.get("enabled"):
+                s3 = boto3.client("s3", region_name=cfg["region"])
+
+                key_main = f"{cfg['prefix']}/{os.path.basename(output_path)}"
+                log_event("s3_upload_start", video_id=video_id, request_id=request_id, key=key_main)
+                upload_with_verify(s3, cfg["bucket"], key_main, output_path, retries=2)
+                payload["s3_uploads"].append({"key": key_main, "ok": True})
+                write_manifest_atomic(manifest_path, payload)
+                log_event("s3_upload_done", video_id=video_id, request_id=request_id, key=key_main)
+
+                if cfg.get("upload_extra"):
+                    for out_p in extra_outputs:
+                        k = f"{cfg['prefix']}/{os.path.basename(out_p)}"
+                        log_event("s3_upload_start", video_id=video_id, request_id=request_id, key=k)
+                        upload_with_verify(s3, cfg["bucket"], k, out_p, retries=2)
+                        payload["s3_uploads"].append({"key": k, "ok": True})
+                        write_manifest_atomic(manifest_path, payload)
+                        log_event("s3_upload_done", video_id=video_id, request_id=request_id, key=k)
+
+            payload["status"] = "done"
+            payload["finished_ts"] = time.time()
+            payload["latency_ms"] = int((payload["finished_ts"] - t0) * 1000)
+            write_manifest_atomic(manifest_path, payload)
+            log_event("video_job_done", video_id=video_id, request_id=request_id, latency_ms=payload["latency_ms"])
+
+            return output_path
+
+        except Exception as e:
+            payload["status"] = "failed"
+            payload["finished_ts"] = time.time()
+            payload["latency_ms"] = int((payload["finished_ts"] - t0) * 1000)
+            payload["errors"].append(repr(e))
+            write_manifest_atomic(manifest_path, payload)
+            log_event("video_job_failed", video_id=video_id, request_id=request_id, error=repr(e), latency_ms=payload["latency_ms"])
+            raise
     def ping(self) -> str:
         # Step 5: minimal liveness probe for actor execution
         return "pong"
