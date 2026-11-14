@@ -76,8 +76,9 @@ class TaskControllerStatsIntegrationTest {
                 .andExpect(jsonPath("$.message").value("OK"))
                 .andExpect(jsonPath("$.data.pendingCount").value(before.getPendingCount() + 2))
                 .andExpect(jsonPath("$.data.runningCount").value(before.getRunningCount() + 1))
+                .andExpect(jsonPath("$.data.successCount").value(before.getSuccessCount() + 1))
                 .andExpect(jsonPath("$.data.failedCount").value(before.getFailedCount() + 1))
-                .andExpect(jsonPath("$.data.deadCount").value(before.getFailedCount() + 1))
+                .andExpect(jsonPath("$.data.deadCount").value(before.getDeadCount() + 1))
                 .andExpect(jsonPath("$.data.totalCount").value(before.getTotalCount() + 6)
                 );
 

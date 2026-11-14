@@ -1,12 +1,16 @@
 package com.hongyun.asynctask.service;
 
+import com.hongyun.asynctask.executor.MediaTaskExecutor;
 import com.hongyun.asynctask.mapper.TaskMapper;
 import com.hongyun.asynctask.mapper.TaskStateAuditMapper;
 import com.hongyun.asynctask.model.*;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
@@ -34,6 +38,19 @@ class TaskExecutionAsyncServiceIntegrationTest {
     private TaskStateAuditMapper taskStateAuditMapper;
 
     private  Long createdTaskId;
+
+
+    @SpyBean
+    private MediaTaskExecutor mediaTaskExecutor;
+
+    @BeforeEach
+    void setUpMediaExecutor() {
+        // Keep the real executor registration, but skip external
+        // Python/Ray execution in task lifecycle integration tests.
+        Mockito.doNothing()
+                .when(mediaTaskExecutor)
+                .execute(Mockito.any(Task.class));
+    }
 
     @AfterEach
     void tearDown() {
@@ -110,6 +127,16 @@ class TaskExecutionAsyncServiceIntegrationTest {
                 TaskStatus.PENDING,
                 0,
                 2
+        );
+
+        Mockito.doThrow(
+                new IllegalStateException(
+                        "Simulated media task execution failure"
+                )
+        ).when(mediaTaskExecutor).execute(
+                Mockito.argThat(
+                        t -> t != null && task.getId().equals(t.getId())
+                )
         );
 
         TaskSubmissionResult submissionResult = taskExecutionAsyncService.submitTask(task);

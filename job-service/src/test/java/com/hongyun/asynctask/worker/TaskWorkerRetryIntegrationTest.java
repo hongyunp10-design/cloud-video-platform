@@ -1,11 +1,13 @@
 package com.hongyun.asynctask.worker;
 
+import com.hongyun.asynctask.executor.MediaTaskExecutor;
 import com.hongyun.asynctask.mapper.TaskMapper;
 import com.hongyun.asynctask.mapper.TaskStateAuditMapper;
 import com.hongyun.asynctask.model.*;
 import com.hongyun.asynctask.scheduler.TaskRetryScheduler;
 import com.hongyun.asynctask.service.TaskExecutionService;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import org.mockito.Mockito;
@@ -22,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = {
         "app.task.execution-worker.enabled=true",
         "app.task.retry-scheduler.enabled=true",
-        "app.task.execution-worker.bacth-size=1000",
+        "app.task.execution-worker.batch-size=1000",
         "app.task.execution-worker.fixed-delay-ms=3600000",
         "app.task.retry-scheduler.fixed-delay-ms=3600000"
 })
@@ -42,6 +44,18 @@ class TaskWorkerRetryIntegrationTest {
 
     @SpyBean
     private TaskExecutionService taskExecutionService;
+
+    @SpyBean
+    private MediaTaskExecutor mediaTaskExecutor;
+
+    @BeforeEach
+    void setUpMediaExecutor() {
+        // Simulate successful MEDIA execution by default.
+        // Keep real claim, state machine, retry, and audit logic.
+        Mockito.doNothing()
+                .when(mediaTaskExecutor)
+                .execute(Mockito.any(Task.class));
+    }
 
     private final List<Long> createdTaskIds = new ArrayList<>();
 
@@ -98,6 +112,16 @@ class TaskWorkerRetryIntegrationTest {
                 TaskStatus.PENDING,
                 0,
                 2
+        );
+
+        Mockito.doThrow(
+                new IllegalStateException(
+                        "Simulated media task execution failure"
+                )
+        ).when(mediaTaskExecutor).execute(
+                Mockito.argThat(
+                        t -> t != null && task.getId().equals(t.getId())
+                )
         );
 
         taskExecutionWorker.executePendingTask();

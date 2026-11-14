@@ -39,6 +39,8 @@ public class MediaTaskExecutor implements TaskExecutor {
 
         Long taskId = task.getId();
 
+        int executionAttempt = task.getRetryCount();
+
         // 1. Find the Python video ID in MySQL.
         String videoId =
                 mediaTaskMapper.selectVideoIdByTaskId(taskId);
@@ -50,24 +52,33 @@ public class MediaTaskExecutor implements TaskExecutor {
         }
 
         log.info(
-                "Starting media task: taskId={}, videoId={}",
+                "event=media_execution_started taskId={} videoId={} attempt={}",
                 taskId,
-                videoId
+                videoId,
+                executionAttempt
         );
 
         // 2. Submit the staged video to Python/Ray.
         videoClient.submitProcessing(videoId);
 
-        // 3. Wait until Python reports a terminal status.
-        for (int attempt = 1; attempt <= MAX_POLLS; attempt++) {
+        log.info(
+                "event=media_process_request_accepted taskId={} videoId={} attempt={}",
+                taskId,
+                videoId,
+                executionAttempt
+        );
 
+        // 3. Wait until Python reports a terminal status.
+        for (int pollNumber = 1; pollNumber <= MAX_POLLS; pollNumber++) {
             String status = videoClient.getStatus(videoId);
 
             if ("done".equals(status)) {
                 log.info(
-                        "Media task completed: taskId={}, videoId={}",
+                        "event=media_processing_done taskId={} videoId={} attempt={} polls={}",
                         taskId,
-                        videoId
+                        videoId,
+                        executionAttempt,
+                        pollNumber
                 );
                 return;
             }
@@ -84,7 +95,7 @@ public class MediaTaskExecutor implements TaskExecutor {
                 );
             }
 
-            if (attempt < MAX_POLLS) {
+            if (pollNumber < MAX_POLLS) {
                 try {
                     Thread.sleep(POLL_INTERVAL_MS);
                 } catch (InterruptedException ex) {

@@ -27,13 +27,6 @@ public class TaskExecutionService {
 
         Long taskId = task.getId();
 
-        log.info(
-                "Task execution started: taskId={}, type={}, name={}",
-                taskId,
-                task.getType(),
-                task.getName()
-        );
-
         Task claimedTask;
 
         // 1. Atomically claim the pending task.
@@ -55,6 +48,17 @@ public class TaskExecutionService {
         // 2. Capture the attempt identity at claim time.
         // Never re-read the latest retryCount when finishing.
         int expectedRetryCount = claimedTask.getRetryCount();
+
+
+        long executionStartNanos = System.nanoTime();
+
+        log.info(
+                "event=task_execution_started taskId={} type={} attempt={} name={}",
+                taskId,
+                claimedTask.getType(),
+                expectedRetryCount,
+                claimedTask.getName()
+        );
 
         // 3. Execute the workload.
         try {
@@ -87,13 +91,19 @@ public class TaskExecutionService {
                 return TaskExecutionResult.skipped(taskId);
             }
 
+
+            long durationMs =
+                    (System.nanoTime() - executionStartNanos) / 1_000_000;
+
             log.warn(
-                    "Task execution failed: taskId={}, attempt={}, reason={}",
+                    "event=task_execution_failed taskId={} attempt={} durationMs={} reason={}",
                     taskId,
                     expectedRetryCount,
+                    durationMs,
                     ex.getMessage(),
                     ex
             );
+
 
             return new TaskExecutionResult(taskId, TaskStatus.FAILED);
         }
@@ -120,13 +130,18 @@ public class TaskExecutionService {
             return TaskExecutionResult.skipped(taskId);
         }
 
+        long durationMs =
+                (System.nanoTime() - executionStartNanos) / 1_000_000;
+
         log.info(
-                "Task execution completed: taskId={}, type={}, attempt={}, finalStatus={}",
+                "event=task_execution_succeeded taskId={} type={} attempt={} durationMs={} finalStatus={}",
                 taskId,
                 claimedTask.getType(),
                 expectedRetryCount,
+                durationMs,
                 TaskStatus.SUCCESS
         );
+
 
         return new TaskExecutionResult(taskId, TaskStatus.SUCCESS);
     }
