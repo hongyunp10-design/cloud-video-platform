@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: api-service
-          image: api-service:v15
+          image: api-service:v18
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

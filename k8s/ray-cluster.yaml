@@ -20,6 +20,8 @@ metadata:
   name: ray-head
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ray-head
@@ -30,7 +32,7 @@ spec:
     spec:
       containers:
         - name: ray-head
-          image: worker-service:s11
+          image: worker-service:s13
           imagePullPolicy: IfNotPresent
           env:
             - name: PYTHONPATH
@@ -44,7 +46,7 @@ spec:
             - name: video-storage
               mountPath: /data
         - name: actor-bootstrap
-          image: worker-service:s11
+          image: worker-service:s13
           imagePullPolicy: IfNotPresent
           env:
             - name: PYTHONPATH
@@ -150,7 +152,7 @@ spec:
     spec:
       containers:
         - name: ray-worker
-          image: worker-service:s11
+          image: worker-service:s13
           imagePullPolicy: IfNotPresent
           workingDir: /app
           env:
