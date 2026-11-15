@@ -50,9 +50,9 @@ jobs:
           cache: maven
           cache-dependency-path: job-service/pom.xml
 
-      - name: Compile and run integration tests
+      - name: Run complete Java test suite
         working-directory: job-service
         env:
           SPRING_PROFILES_ACTIVE: test
           DB_PASSWORD: ci_test_password
-        run: mvn -B -ntp -Dtest=MediaTaskMapperIntegrationTest,MediaTaskServiceIntegrationTest,TaskAttemptFencingIntegrationTest,TaskTimeoutRaceIntegrationTest,TaskConcurrentClaimIntegrationTest,MediaTaskConcurrentSubmissionIntegrationTest test
+        run: mvn -B -ntp test
