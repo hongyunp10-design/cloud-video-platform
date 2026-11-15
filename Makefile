@@ -50,3 +50,34 @@ status:
 	kubectl get pods
 	kubectl get pvc
 	kubectl get services
+
+
+.PHONY: build-images
+
+API_IMAGE := api-service:v18
+WORKER_IMAGE := worker-service:s13
+JOB_IMAGE := job-service:dev
+
+build-images:
+	docker build -t $(API_IMAGE) ./api-service
+	docker build --no-cache -t $(WORKER_IMAGE) ./worker-service
+	docker build -t $(JOB_IMAGE) ./job-service
+
+	@echo "Verifying Worker image source integrity..."
+	@local_hash="$$(shasum -a 256 worker-service/tasks/video_tasks.py | awk '{print $$1}')"; \
+	image_hash="$$(docker run --rm --entrypoint sha256sum $(WORKER_IMAGE) /app/tasks/video_tasks.py | awk '{print $$1}')"; \
+	test "$$local_hash" = "$$image_hash" || { \
+		echo "ERROR: Worker source hash mismatch"; \
+		exit 1; \
+	}
+	@docker run --rm --entrypoint python3 $(WORKER_IMAGE) -c \
+		'from tasks.video_tasks import VideoWorker; print("VideoWorker import OK")'
+	@docker run --rm --entrypoint sh $(JOB_IMAGE) -c \
+		'test -s /app/app.jar && echo "Java JAR OK"'
+
+	@echo "Loading images into Minikube..."
+	minikube image load --overwrite=true $(API_IMAGE)
+	minikube image load --overwrite=true $(WORKER_IMAGE)
+	minikube image load --overwrite=true $(JOB_IMAGE)
+
+	@echo "Image build and validation completed."
