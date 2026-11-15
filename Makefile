@@ -111,3 +111,13 @@ bootstrap:
 # Full local build and deployment.
 dev-up: bootstrap build-images deploy
 	@echo "Development environment deployment completed."
+
+.PHONY: e2e-test
+
+e2e-test:
+	@test "$$(kubectl config current-context)" = "minikube" || { \
+		echo "ERROR: Kubernetes context must be minikube"; \
+		exit 1; \
+	}
+	kubectl exec -i deployment/api-service -c api-service -- \
+		python3 - < scripts/e2e_smoke.py
