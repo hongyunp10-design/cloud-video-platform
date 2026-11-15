@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # ✅ 复制 tasks 代码到镜像
 COPY tasks /app/tasks
+RUN python3 -c "from tasks.video_tasks import VideoWorker; print('VideoWorker import OK')"
 
 # ✅ 关键：让 Ray 的子进程无论 cwd 在哪里，都能 import 到 /app 下的 tasks
 ENV PYTHONPATH=/app
