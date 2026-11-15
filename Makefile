@@ -81,3 +81,33 @@ build-images:
 	minikube image load --overwrite=true $(JOB_IMAGE)
 
 	@echo "Image build and validation completed."
+
+
+.PHONY: bootstrap dev-up
+
+# Initialize required local Kubernetes credentials.
+bootstrap:
+	@test "$$(kubectl config current-context)" = "minikube" || { \
+		echo "ERROR: Kubernetes context must be minikube"; \
+		exit 1; \
+	}
+	@kubectl cluster-info >/dev/null
+
+	@if kubectl get secret mysql-credentials >/dev/null 2>&1; then \
+		echo "MySQL credentials already exist. Keeping existing Secret."; \
+	elif kubectl get pvc mysql-data-mysql-0 >/dev/null 2>&1; then \
+		echo "ERROR: MySQL data exists but credentials are missing."; \
+		echo "Restore the original Secret instead of generating new passwords."; \
+		exit 1; \
+	else \
+		echo "Generating MySQL credentials..."; \
+		root_password="$$(openssl rand -hex 24)"; \
+		app_password="$$(openssl rand -hex 24)"; \
+		kubectl create secret generic mysql-credentials \
+			--from-literal=root-password="$$root_password" \
+			--from-literal=app-password="$$app_password"; \
+	fi
+
+# Full local build and deployment.
+dev-up: bootstrap build-images deploy
+	@echo "Development environment deployment completed."
