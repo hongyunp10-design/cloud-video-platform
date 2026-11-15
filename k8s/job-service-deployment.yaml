@@ -1,0 +1,84 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-service
+  template:
+    metadata:
+      labels:
+        app: job-service
+    spec:
+      containers:
+        - name: job-service
+          image: job-service:dev
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 8080
+
+          env:
+            - name: DB_URL
+              value: "jdbc:mysql://mysql:3306/cloud_video_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+
+            - name: DB_USERNAME
+              value: "video_app"
+
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: app-password
+
+            - name: VIDEO_API_BASE_URL
+              value: "http://api-service:8000"
+
+            - name: SPRING_PROFILES_ACTIVE
+              value: "default"
+
+            - name: APP_TASK_EXECUTION_WORKER_ENABLED
+              value: "true"
+
+            - name: SPRING_DATA_REDIS_HOST
+              value: "redis"
+
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: job-service
+spec:
+  type: ClusterIP
+  selector:
+    app: job-service
+  ports:
+    - port: 8080
+      targetPort: 8080
