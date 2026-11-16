@@ -4,6 +4,8 @@ name: Job Service CI
 on:
   push:
     branches: [main]
+  paths-ignore:
+    - 'deploy/gitops/**'
   pull_request:
     branches: [main]
 
@@ -137,3 +139,64 @@ jobs:
           file: ${{ matrix.dockerfile }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+  update-gitops:
+    name: Promote images to GitOps
+    needs: publish-images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Update GitOps image versions
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+
+          # Never deploy an older workflow run over newer code.
+          CURRENT_SHA="$(git rev-parse origin/main)"
+          if [ "$CURRENT_SHA" != "$RELEASE_SHA" ]; then
+            echo "Skipping outdated release: $RELEASE_SHA"
+            exit 0
+          fi
+
+          FILE="deploy/gitops/kustomization.yaml"
+
+          # This project publishes exactly three application images.
+          COUNT="$(grep -cE '^[[:space:]]*newTag:' "$FILE")"
+          if [ "$COUNT" -ne 3 ]; then
+            echo "ERROR: Expected exactly 3 image tags, found $COUNT"
+            exit 1
+          fi
+
+          sed -i -E \
+            "s/^([[:space:]]*newTag:[[:space:]]*).*/\1${RELEASE_SHA}/" \
+            "$FILE"
+
+          git diff --check
+
+          if git diff --quiet -- "$FILE"; then
+            echo "GitOps already points to $RELEASE_SHA"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "$FILE"
+          git commit -m "chore(gitops): deploy $RELEASE_SHA"
+          git push origin HEAD:main
+
+          echo "Promoted $RELEASE_SHA to GitOps"
