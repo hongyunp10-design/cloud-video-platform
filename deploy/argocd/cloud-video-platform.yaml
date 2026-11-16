@@ -1,0 +1,28 @@
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: cloud-video-platform
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/hongyunp10-design/cloud-video-platform.git
+    targetRevision: main
+    path: deploy/gitops
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  syncPolicy:
+    automated:
+      enabled: false
+      prune: false
+      selfHeal: false
+
+    syncOptions:
+      - Prune=false
