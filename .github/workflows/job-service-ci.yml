@@ -3,9 +3,10 @@ name: Job Service CI
 
 on:
   push:
-    branches: [main]
-  paths-ignore:
-    - 'deploy/gitops/**'
+    branches:
+      - main
+    paths-ignore:
+      - 'deploy/gitops/**'
   pull_request:
     branches: [main]
 
