@@ -21,7 +21,7 @@ preflight:
 	@echo "Preflight checks passed."
 
 # Deploy the validated application stack.
-deploy: preflight
+deploy: preflight local-deploy-guard
 	kubectl apply -f k8s/pv-pvc.yaml
 
 	kubectl apply -f k8s/mysql.yaml
@@ -109,7 +109,7 @@ bootstrap:
 	fi
 
 # Full local build and deployment.
-dev-up: bootstrap build-images deploy
+dev-up: local-deploy-guard bootstrap build-images deploy
 	@echo "Development environment deployment completed."
 
 .PHONY: e2e-test
@@ -121,3 +121,12 @@ e2e-test:
 	}
 	kubectl exec -i deployment/api-service -c api-service -- \
 		python3 - < scripts/e2e_smoke.py
+
+.PHONY: local-deploy-guard
+
+local-deploy-guard:
+	@if kubectl get application cloud-video-platform -n argocd >/dev/null 2>&1; then \
+		echo "ERROR: This cluster is managed by Argo CD."; \
+		echo "Use the GitOps overlay instead of make deploy."; \
+		exit 1; \
+	fi
