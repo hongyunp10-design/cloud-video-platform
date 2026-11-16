@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../k8s
+
+images:
+  - name: api-service
+    newName: ghcr.io/hongyunp10-design/cloud-video-platform-api-service
+    newTag: e3f4c38a82058fde474cb4654173e05c300653df
+
+  - name: worker-service
+    newName: ghcr.io/hongyunp10-design/cloud-video-platform-worker-service
+    newTag: e3f4c38a82058fde474cb4654173e05c300653df
+
+  - name: job-service
+    newName: ghcr.io/hongyunp10-design/cloud-video-platform-job-service
+    newTag: e3f4c38a82058fde474cb4654173e05c300653df
