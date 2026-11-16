@@ -15,4 +15,4 @@ images:
 
   - name: job-service
     newName: ghcr.io/hongyunp10-design/cloud-video-platform-job-service
-    newTag: e32f3508d4fc91be3a985e8ab18c1e5853c66066
+    newTag: e3f4c38a82058fde474cb4654173e05c300653df
