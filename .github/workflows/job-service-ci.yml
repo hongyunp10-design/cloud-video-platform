@@ -55,7 +55,21 @@ jobs:
         env:
           SPRING_PROFILES_ACTIVE: test
           DB_PASSWORD: ci_test_password
-        run: mvn -B -ntp test
+        run: mvn -B -ntp verify
+
+      - name: Prepare release JAR
+        working-directory: job-service
+        run: |
+          test -s target/job-service-0.0.1-SNAPSHOT.jar
+          cp target/job-service-0.0.1-SNAPSHOT.jar app.jar
+
+      - name: Upload Java release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-service-jar
+          path: job-service/app.jar
+          if-no-files-found: error
+          retention-days: 7
 
   publish-images:
     name: Publish ${{ matrix.name }}
@@ -73,14 +87,32 @@ jobs:
         include:
           - name: api-service
             context: ./api-service
+            dockerfile: ./api-service/Dockerfile
+
           - name: worker-service
             context: ./worker-service
+            dockerfile: ./worker-service/Dockerfile
+
           - name: job-service
             context: ./job-service
+            dockerfile: ./job-service/Dockerfile.release
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Download Java release artifact
+        if: matrix.name == 'job-service'
+        uses: actions/download-artifact@v4
+        with:
+          name: job-service-jar
+          path: ./job-service
+
+      - name: Verify downloaded JAR
+        if: matrix.name == 'job-service'
+        run: |
+          test -s job-service/app.jar
+          sha256sum job-service/app.jar
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -102,5 +134,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ github.sha }}
+          file: ${{ matrix.dockerfile }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
