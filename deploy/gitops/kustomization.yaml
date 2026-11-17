@@ -7,12 +7,12 @@ resources:
 images:
   - name: api-service
     newName: ghcr.io/hongyunp10-design/cloud-video-platform-api-service
-    newTag: e32f3508d4fc91be3a985e8ab18c1e5853c66066
+    newTag: f823f507b398ad4d8f323e2b24dc67639fc52c03
 
   - name: worker-service
     newName: ghcr.io/hongyunp10-design/cloud-video-platform-worker-service
-    newTag: e32f3508d4fc91be3a985e8ab18c1e5853c66066
+    newTag: f823f507b398ad4d8f323e2b24dc67639fc52c03
 
   - name: job-service
     newName: ghcr.io/hongyunp10-design/cloud-video-platform-job-service
-    newTag: e32f3508d4fc91be3a985e8ab18c1e5853c66066
+    newTag: f823f507b398ad4d8f323e2b24dc67639fc52c03
